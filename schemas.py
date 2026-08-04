@@ -27,7 +27,7 @@ class QuestionCreate(BaseModel):
     year: int 
     marks: int
     image_urls: List[str] = Field(default_factory=list)
-    topic: str
+    topic_id: int
 
 class QuestionResponse(BaseModel):
     id: int

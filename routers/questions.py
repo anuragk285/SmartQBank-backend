@@ -7,6 +7,7 @@ from typing import List, Optional
 from sqlalchemy import case, asc, desc
 import json, hashlib
 from redis_fastapi import CacheBackendDep
+from routers.topics import get_topic
 
 
 router = APIRouter(
@@ -37,7 +38,7 @@ def build_cache_key(**kwargs) -> str:
 @router.get("/{subject_id}/questions", response_model=PaginatedQuestions)
 async def get_all_questions(subject_id: int,
                       cache: CacheBackendDep,
-                      topic: Optional[str] = None,
+                      topic_ids: Optional[List[int]] = None,
                       units: Optional[List[int]] = Query(None),
                       difficulty: Optional[List[str]] = Query(None),
                       marks: Optional[List[int]] = Query(None),
@@ -48,7 +49,7 @@ async def get_all_questions(subject_id: int,
                       db: Session = Depends(get_db)):
     try:
         cache_key = build_cache_key(
-            subject_id=subject_id, topic=topic, units=units, difficulty=difficulty,
+            subject_id=subject_id, topic_ids=topic_ids, units=units, difficulty=difficulty,
             marks=marks, sort_by=sort_by, sort_order=sort_order, page=page, page_size=page_size,
         )
         cached = await cache.get(cache_key, eviction_group="questions")
@@ -56,9 +57,10 @@ async def get_all_questions(subject_id: int,
             return cached
     except Exception as e:     
         print(f"Cache error")
+
     query = (db.query(Question).join(Subject, Question.subject_code == Subject.subject_code).filter(Subject.id == subject_id))
-    if topic:
-        query = query.filter(Question.topic == topic)
+    if topic_ids:
+        query = query.filter(Question.topic_id.in_(topic_ids))
     if units:
         query = query.filter(Question.unit.in_(units))
     if marks:
@@ -74,9 +76,16 @@ async def get_all_questions(subject_id: int,
 
     total = query.count()
     questions = query.offset((page - 1) * page_size).limit(page_size).all()
-
+    formatted_questions = []
+    unique_topic_ids = {getattr(q, "topic_id", None) for q in questions if getattr(q, "topic_id", None)}
+    topic_map = {topic_id: get_topic(topic_id=topic_id, db=db).topic for topic_id in unique_topic_ids}
+    for q in questions:
+        q_data = q.__dict__.copy() if hasattr(q, "__dict__") else dict(q)
+        topic_id = getattr(q, "topic_id", None)
+        q_data["topic"] = topic_map.get(topic_id)
+        formatted_questions.append(QuestionResponse.model_validate(q_data).model_dump())
     result = {
-        "questions": [QuestionResponse.model_validate(q).model_dump() for q in questions],
+        "questions": formatted_questions,
         "total": total,
         "page": page,
         "page_size": page_size,

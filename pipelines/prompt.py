@@ -80,15 +80,36 @@ FIELD RULES
 
 7. image_indices
    ***IMPORTANT: set image_indices to the list of numbered-tag values (read
-     directly off the red boxes on the page, e.g. [1], [2, 3], or [] for none)
+     directly off the red boxes on the page, e.g. [1], [2, 3, 4], [1, 2, 3, ....], or [] for none)
      that belong to THIS specific question — directly below that question's
      row, or immediately beside it if no space exists below before the next
-     question begins. Empty list if none belong to this row.
+     question begins, or above the question's row just beside and starting
+     from question label (eg question labels: 15, (a), (b)).
    - A tag belongs to THIS specific question if it sits between this
      question's row and the start of the next question's row (or the next
      OR/section boundary), with no other question's text in between. A tag
      sitting closer to a different question belongs to that question, not
      this one, and must not be included here.
+   - Label-then-figures-then-text pattern: sometimes a sub-part's label
+     (e.g. "(b)") is immediately followed by one or more tagged boxes with
+     no descriptive text in between, and that sub-part's own question text
+     only appears further down the page, after all of those boxes, right
+     before the next label/OR/section boundary. This still counts as
+     belonging to that sub-part's row — the "row" is everything from the
+     label to the next boundary, and the text simply happens to be the last
+     thing in it rather than the first. Include EVERY tag that falls between
+     the label and that boundary, however many there are, in that single
+     row's image_indices. Do not keep only the first tag, do not split the
+     set across rows, and do not drop any of them for lack of an adjacent
+     sentence.
+     Example: "15. (a) Explain the construction of a Rule-based classifier.
+     (b)" is followed immediately by three tagged boxes in sequence — a
+     decision-tree diagram, a "Training" data table, and a "Validation" data
+     table — and only below all three does the sub-part's text appear:
+     "Find the training error (based on training dataset), Generalization
+     error based on the decision tree given above." All three tag numbers
+     belong to 15(b) alone: image_indices = [n1, n2, n3] for that one row —
+     not [], and not split across separate rows.
    - ***IMPORTANT: a tag positioned in the shared preamble of a question —
      i.e., before any lettered sub-part ((a), (b), (i)...) of that question
      begins — belongs to EVERY sub-part under that question number, not just
@@ -120,10 +141,11 @@ FIELD RULES
      EACH row's image_indices. If either row also has its own additional tag
      beyond the shared one, add that number to that row's list only.
    - If this question genuinely has more than one tag belonging to it (e.g.
-     one after sub-part (i) and a separate one after sub-part (ii)), include
-     both numbers — image_indices = [2, 5], not just one. Do not collapse
-     multiple distinct tags belonging to the same question into a single
-     entry.
+     one after sub-part (i) and a separate one after sub-part (ii), or
+     several stacked figures/tables under one label as in the pattern
+     above), include all of them — image_indices = [2, 5], not just one.
+     Do not collapse multiple distinct tags belonging to the same question
+     into a single entry.
    - ***IMPORTANT: a visible numbered tag is the ONLY valid evidence for a
      non-empty image_indices. Wording like "with a neat diagram", "with
      suitable examples", or "illustrate the following" instructs the STUDENT
@@ -133,27 +155,45 @@ FIELD RULES
      Example: "Demonstrate the structure of the TCP segment header with a
      neat diagram" has image_indices = [] unless an actual tagged box is
      visibly drawn adjacent to or beneath that row.
-   - ***IMPORTANT: a tag only counts if the content enclosed by that specific
-     box is a genuine MATRIX — a rectangular grid of plain entries (numbers,
-     or short algebraic terms) arranged in rows and columns, normally under
-     one pair of large brackets/parentheses spanning the whole grid (e.g. a
-     payoff matrix, a coefficient matrix, a cost/transportation matrix shown
-     in bracket form). If the boxed content is instead an objective function
-     ("Maximize Z = ..."), a constraint or inequality, a single equation, or
-     any stacked list of such lines — even when grouped by a shared brace,
-     even when tagged — exclude that tag's number entirely; treat it as if
-     no box were drawn there.
-     The test: does any line inside the box read as a complete equation or
-     inequality (contains =, ≤, ≥, <, or >)? If yes, it's equations, not a
-     matrix — exclude the tag. If every entry is a bare value with no
-     relational operator, it's a matrix — include the tag under all the
-     attribution rules above.
-     Example: a tagged box around "Maximize Z = 5x1 - 4x2 + 3x3" together
-     with constraints like "2x1+x2-6x3=20" and "6x1+5x2+10x3≤76" is
-     equations — image_indices = [] for that question, tag or no tag.
-     Example: a tagged box around a 4x4 grid of bare numbers under one
-     bracket (e.g. a two-player payoff matrix) IS a matrix — include its tag
-     number for the question it belongs to.
+   - ***IMPORTANT: the equations-vs-matrix test below applies ONLY to boxes
+     whose content is a stack of algebraic lines (an objective function,
+     one or more constraints/inequalities, or a system of equations) that
+     could be mistaken for a matrix because the upstream step grouped them
+     under a shared brace or box. It has NO bearing on any other content
+     type. Diagrams, flowcharts, decision trees, circuits, graphs, chemical
+     structures, and printed data/lookup tables (rows of labelled data under
+     column headers — e.g. a table headed "Instance A B C Class") are never
+     subject to this test, regardless of whether they contain brackets, and
+     must be included under the normal placement/attribution rules above.
+     Only run the test at all when the box is actually a candidate
+     matrix/equation block:
+     - Genuine MATRIX: a rectangular grid of bare entries (numbers, or short
+       algebraic terms) arranged in rows and columns, normally under one
+       pair of large brackets/parentheses spanning the whole grid (e.g. a
+       payoff matrix, a coefficient matrix, a transportation-cost matrix
+       shown in bracket form). Include the tag.
+     - Equations, not a matrix: an objective function ("Maximize Z = ..."),
+       a constraint or inequality, a single equation, or any stacked list of
+       such lines — even grouped by a shared brace, even when tagged.
+       Exclude that tag's number entirely; treat it as if no box were drawn
+       there.
+     The test, when it applies: does any line inside the box read as a
+     complete equation or inequality (contains =, ≤, ≥, <, or >)? If yes,
+     it's equations, not a matrix — exclude the tag. If every entry is a
+     bare value with no relational operator, it's a matrix — include the
+     tag under all the attribution rules above.
+     Example (exclude): a tagged box around "Maximize Z = 5x1 - 4x2 + 3x3"
+     together with constraints like "2x1+x2-6x3=20" and
+     "6x1+5x2+10x3≤76" is equations — image_indices = [] for that question,
+     tag or no tag.
+     Example (include, matrix): a tagged box around a 4x4 grid of bare
+     numbers under one bracket (e.g. a two-player payoff matrix) IS a
+     matrix — include its tag number for the question it belongs to.
+     Example (include, test doesn't even apply): a tagged box around a
+     decision-tree diagram, or around a data table headed "Instance A B C
+     Class" with rows of 0/1/+/- values, is a diagram/table, not a
+     candidate equation block — this test never applies to it; include its
+     tag under the normal placement rules.
    - If genuinely unsure whether a nearby tag belongs to this question or a
      neighboring one, leave it out of this question's list rather than
      guessing it belongs here.
@@ -191,8 +231,9 @@ FIELD RULES
       "All Branches"), not a fabricated list of every department.
     - Examples:
         "B.E. (CET, CSE & IT)" -> "CET, CSE, IT",
-        "(B.E. CSE-AI&ML)" -> "CSM",
-        "(B.E. CSE-IoT & CS Including BCT)" -> "IOT".
+        "B.E. (CSE-AI&ML)" -> "CSE-AI&ML",
+        "B.E. (CSE-IoT & CS Including BCT)" -> "IOT".
+        "B.E. (CSE & CSE-IoT & CS Including BCT)" -> "CSE, IOT".
     
     - regulation_code: the code printed inside a bordered box (rounded
      rectangle, plain rectangle, or similar outline shape) in the TOP-LEFT

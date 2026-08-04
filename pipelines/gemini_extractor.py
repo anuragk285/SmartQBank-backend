@@ -84,7 +84,7 @@ def existing_crop_indices(pdf_paper):
 
 def make_call(uploaded_pages, temperature):
     response = client.models.generate_content(
-        model="gemini-3.6-flash",
+        model="gemini-3.5-flash-lite",
         contents=[
             *[types.Part.from_uri(file_uri=f.uri, mime_type=f.mime_type)for f in uploaded_pages],
             types.Part.from_text(text=prompt),
@@ -113,8 +113,13 @@ def make_call_with_retry(uploaded_pages, max_retries=3):
         return response  
     return response
 
-generate_crop_pngs_from_pdf()
+def get_confiramtion():
+    user_response = ' '
+    while user_response not in ['Y', 'N']:
+        user_response = input("Proceed or Not: (Y/N): ")
+    return user_response
 
+generate_crop_pngs_from_pdf()
 for pdf_paper in target_folder.iterdir():
     base_name = os.path.splitext(os.path.basename(pdf_paper))[0]
     print(f"Found folder/file: {base_name}")
@@ -140,11 +145,6 @@ for pdf_paper in target_folder.iterdir():
                 continue  
             questions = result.questions
 
-            # Verify every index Gemini referenced actually exists as a crop file, and
-            # every crop file that exists got claimed by at least one question. This
-            # compares SETS per page rather than summing counts, so a tag legitimately
-            # shared by two sub-parts (same index inside two questions' image_indices)
-            # is correctly NOT flagged — only a real disagreement is.
             existing_by_page = existing_crop_indices(pdf_paper)
             referenced_by_page = defaultdict(set)
             for q in questions:
@@ -158,6 +158,7 @@ for pdf_paper in target_folder.iterdir():
                 unclaimed = existing - referenced
                 if hallucinated:
                     mismatch_msgs.append(f"page {page}: Gemini referenced index(es) {sorted(hallucinated)} with no matching crop file")
+                    
                 if unclaimed:
                     mismatch_msgs.append(f"page {page}: crop index(es) {sorted(unclaimed)} exist but were never claimed by a question")
 
@@ -166,16 +167,14 @@ for pdf_paper in target_folder.iterdir():
                 for msg in mismatch_msgs:
                     print(f"  {msg}")
                 print()
-                continue
+                if get_confiramtion() == 'N':
+                        exit()
 
             question_text_list = [q.text for q in questions]
             regulation_code = result.subject.regulation_code
             subject_code = result.subject.subject_code
             matched_questions = match_topics(regulation_code, subject_code, question_text_list)
 
-            # Cache by (page, index) so a crop shared across multiple questions (e.g. a
-            # stem table used by two sub-parts) gets uploaded to Cloudinary once, not
-            # once per question that references it.
             _url_cache = {}
             def get_url_for(page, idx):
                 key = (page, idx)

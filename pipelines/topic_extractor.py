@@ -7,6 +7,7 @@ import os
 import json
 from dotenv import load_dotenv
 from pathlib import Path
+from pipelines.pdf_splitter import split_syllabus_by_subject
 
 load_dotenv()
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
@@ -178,13 +179,17 @@ def add_to_json(file_path, subject_code, new_data):
     with open(file_path, 'w') as file:
         json.dump(data, file, indent=4)
 
-def get_sujbect_code(name: str):
+def get_sujbect_code(name: str, pdf_path):
     i = 0
     subject_code = ""
-    while name[i] != '_':
-      subject_code += name[i]
-      i += 1
-    return subject_code
+    try:
+      while name[i] != '_':
+        subject_code += name[i]
+        i += 1
+      return subject_code
+    except Exception as e:
+      print(name, pdf_path)
+      raise e
 
 def extractor():
     for regulation in target_folder.iterdir():
@@ -193,8 +198,16 @@ def extractor():
           regulation_code = f'{regulation.name}'
           output_file_path = f'pipelines/extracted_topics/{regulation_code}.json'
           images_output_folder = f'pipelines/topic_images/{regulation_code}/{base_name}'
-          subject_code = get_sujbect_code(base_name)
-          
+          subject_code = get_sujbect_code(base_name, pdf_path)
+          if os.path.exists(output_file_path):
+            try:  
+              with open(f'{output_file_path}', 'r') as f:
+                output_file_existing_data = json.load(f)
+                if subject_code in output_file_existing_data:
+                    print(f"{subject_code} ALREADY EXISTS IN {output_file_path}")
+                    continue
+            except Exception as e:
+                raise e
           print(f"Processing: {regulation_code}/{base_name}")
           image_paths = pdf_to_images(pdf_path=pdf_path, output_path=images_output_folder)
           
@@ -205,5 +218,16 @@ def extractor():
             units_dict = [unit.model_dump() for unit in result.units]
             add_to_json(output_file_path, subject_code=subject_code, new_data=units_dict)
 
-if __name__ == "__main__":
-    extractor()
+def get_regulation_code(name: str):
+    regulation_code = ""
+    i = 0
+    while i < len(name) and name[i] != '-':
+        regulation_code += name[i]
+        i += 1
+    return regulation_code
+
+for path in Path('/Users/anuragmac/Documents/projects/smart_question_back_project/backend/pipelines/topic_pdfs/').glob("*.pdf"):
+  regulation_code = get_regulation_code(path.stem)
+  split_syllabus_by_subject(pdf_path=path, output_folder=f'pipelines/split_subjects/{regulation_code}')
+  print(f"Splitted {regulation_code}")
+extractor()

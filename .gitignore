@@ -55,3 +55,4 @@ pipelines/*.json
 *.pyc
 
 migrate.py
+/pipelines/check.py

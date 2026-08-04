@@ -1,7 +1,7 @@
 from database import SessionLocal, engine
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
-from models import Question, Subject, PaperAppearances, Base
+from models import Question, Subject, PaperAppearances, Base, Topic
 from schemas import QuestionCreate, SubjectCreate, PaperAppearancesCreate
 import json
 
@@ -39,6 +39,13 @@ def parse_difficulty(difficulty_level: int):
     elif difficulty_level <= 6: return 'Hard'
     return 'None'
 
+def get_topic_id(topic: str, db: Session):
+    db_topic = db.query(Topic).filter(Topic.topic == topic).first()
+    if db_topic:
+        return db_topic.id
+    else:
+        print(f'TOPIC {topic} NOT FOUND IN DATABASE')
+        return 0
 
 def db_loader(path='pipelines/extracted_data.json'):
     Base.metadata.create_all(bind=engine)
@@ -66,6 +73,7 @@ def db_loader(path='pipelines/extracted_data.json'):
             question_list = paper['questions']
             paper_info = paper['paperInfo']
             for q in question_list:
+                topic_id = get_topic_id(q['topic'], db)
                 question = QuestionCreate(text=q['text'],
                                         subject_code=q['subject_code'],
                                         difficulty=parse_difficulty(q['difficulty_level']),
@@ -73,7 +81,7 @@ def db_loader(path='pipelines/extracted_data.json'):
                                         year=q['year'],
                                         marks=q['marks'],
                                         image_urls=q['image_urls'],
-                                        topic = q['topic'])
+                                        topic_id = topic_id)
                 
                 try:
                     db_question = load_question(question=question, db=db)

@@ -4,7 +4,7 @@ import pymupdf
 import pytesseract
 from doclayout_yolo import YOLOv10
 from huggingface_hub import hf_hub_download
-from PIL import ImageDraw, Image
+from PIL import ImageDraw, Image, ImageFont
 
 TARGET_FOLDER = 'pipelines/uploads'
 target_folder = Path(TARGET_FOLDER)
@@ -15,9 +15,7 @@ _layout_model_path = hf_hub_download(
 )
 layout_model = YOLOv10(_layout_model_path)
 FIGURE_LABELS = {"figure", "isolate_formula", "table"}
-
 _DATE_LIKE = re.compile(r'^\s*\d{1,2}\s*[/\-.]\s*\d{1,2}\s*[/\-.]\s*\d{2,4}\s*$')
-
 _SECTION_HEADER_RE = re.compile(
     r'(?i)('
     r'\bpart\s*[-–—]?\s*[a-z0-9]\b|'           # Part - A, PART B
@@ -27,10 +25,19 @@ _SECTION_HEADER_RE = re.compile(
     r'\bmax\.?\s*marks\b'                      # Max Marks
     r')'
 )
-
+RECLASSIFY_LABELS = {"plain text"} 
+_DIGIT_LIKE = set('0123456789OolLIi[]|')
 def page_num(path):
     match = re.search(r'page_(\d+)', os.path.basename(str(path)))
     return int(match.group(1)) if match else 0
+
+def _load_tag_font(size):
+    try:
+        import matplotlib
+        font_path = Path(matplotlib.get_data_path()) / "fonts" / "ttf" / "DejaVuSans-Bold.ttf"
+        return ImageFont.truetype(str(font_path), size=size)
+    except (ImportError, OSError):
+        return ImageFont.load_default(size=size)
 
 
 def pdf_to_images(pdf_path, output_path, dpi=300):
@@ -47,6 +54,19 @@ def pdf_to_images(pdf_path, output_path, dpi=300):
         images.append(img_path)
     return images  # returns list of paths of images
 
+def looks_like_matrix(text, box, img_shape, min_lines=2, min_char_ratio=0.6):
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if len(lines) < min_lines:
+        return False
+    compact = re.sub(r'\s+', '', text)
+    if not compact:
+        return False
+    digit_like_chars = sum(1 for c in compact if c in _DIGIT_LIKE)
+    if (digit_like_chars / len(compact)) < min_char_ratio:
+        return False
+    h, w = img_shape[:2]
+    x1, y1, x2, y2 = box
+    return (x2 - x1) < 0.5 * w
 
 def is_mostly_blank(cropped_bgr, ink_thresh=0.01):
     """Pure pixel check, no OCR, no class-specific assumptions — safe on
@@ -123,7 +143,7 @@ def dedupe_overlapping(detected_elements, iou_thresh=0.5, containment_thresh=0.8
     return kept
 
 
-def pad_box(xmin, ymin, xmax, ymax, img_shape, pad=20):
+def pad_box(xmin, ymin, xmax, ymax, img_shape, pad=10):
     h, w = img_shape[:2]
     xmin = max(0, xmin - pad)
     ymin = max(0, ymin - pad)
@@ -133,8 +153,6 @@ def pad_box(xmin, ymin, xmax, ymax, img_shape, pad=20):
 
 
 def _detect_elements(image_path, conf):
-    """One detection pass for a page. Filters to FIGURE_LABELS, drops blanks, 
-    headers, and noise, dedupes, and returns elements sorted top-to-bottom."""
     img_bgr = cv2.imread(image_path)
     results = layout_model.predict(image_path, imgsz=1024, conf=conf, iou=0.5, agnostic_nms=True, verbose=False)
     result = results[0]
@@ -143,9 +161,21 @@ def _detect_elements(image_path, conf):
     for i, cls in enumerate(result.boxes.cls):
         class_id = int(cls.item())
         label = result.names[class_id].lower()
+        box = result.boxes.xyxy[i].cpu().numpy().astype(int)
+        box_conf = float(result.boxes.conf[i].item())
         if label not in FIGURE_LABELS:
+            if label in RECLASSIFY_LABELS:
+                x1, y1, x2, y2 = box
+                crop = img_bgr[y1:y2, x1:x2]
+                if is_mostly_blank(crop):
+                    continue
+                rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+                text = pytesseract.image_to_string(Image.fromarray(rgb), config='--psm 6').strip()
+                if looks_like_matrix(text, box, img_bgr.shape):
+                    print(f"  [reclassify] {label} -> table  conf={box_conf:.2f} box={list(box)}")
+                    candidates.append({"box": box, "label": "table", "conf": box_conf})
             continue
-            
+                
         box = result.boxes.xyxy[i].cpu().numpy().astype(int)
         box_conf = float(result.boxes.conf[i].item())
         x1, y1, x2, y2 = box
@@ -155,11 +185,9 @@ def _detect_elements(image_path, conf):
             print(f"  [reject:blank]  {label:16s} conf={box_conf:.2f} box={list(box)}")
             continue
             
-        # Extract OCR text ONCE per crop to be used by all text-based filters
         rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
         text = pytesseract.image_to_string(Image.fromarray(rgb), config='--psm 6').strip()
 
-        # Reject section titles / mark distributions (fixes the "Part - A" bug)
         if is_section_header(text):
             print(f"  [reject:header] {label:16s} conf={box_conf:.2f} box={list(box)}")
             continue
@@ -177,27 +205,33 @@ def _detect_elements(image_path, conf):
     kept = sorted(kept, key=lambda e: e["box"][1])  # canonical top-to-bottom order -> tag numbers
     return kept, img_bgr
 
-
 def process_page(image_path, outlined_output_path, crops_output_dir, conf=0.5):
-    """Single detection pass per page, reused for both the numbered outline
-    preview (what Gemini reads) and the actual crop files (what gets
-    uploaded). Each box gets a small numbered tag at its top-left corner,
-    matching the index in its crop's filename (page_N_crop_<tag>.png) —
-    Gemini reads that number directly instead of inferring position, and
-    reports it back per-question so a tag can be attributed to more than one
-    question when a single image is legitimately shared (e.g. a table given
-    once before two sub-parts that both need it)."""
     detected_elements, img_bgr = _detect_elements(image_path, conf)
-
     img = Image.open(image_path).convert("RGB")
     draw = ImageDraw.Draw(img)
+
+    # scale font to the page's actual pixel size, not a fixed constant —
+    # keeps tags legible whether you later change dpi in pdf_to_images
+    font_size = max(32, img.height // 55)   # ~48px at your current 300 dpi
+    try:
+        font = _load_tag_font(font_size)
+    except OSError:
+        font = ImageFont.load_default(size=font_size)  # Pillow >= 10.1.0 fallback
+
     for idx, element in enumerate(detected_elements, start=1):
         box = list(element["box"])
         draw.rectangle(box, outline="red", width=4)
         label = str(idx)
-        tag_w, tag_h = 18 + 13 * len(label), 24
+
+        # size the red tag background off the real rendered text bbox
+        l, t, r, b = draw.textbbox((0, 0), label, font=font)
+        text_w, text_h = r - l, b - t
+        pad_x, pad_y = 10, 6
+        tag_w, tag_h = text_w + pad_x * 2, text_h + pad_y * 2
+
         draw.rectangle([box[0], box[1], box[0] + tag_w, box[1] + tag_h], fill="red")
-        draw.text((box[0] + 6, box[1] + 3), label, fill="white")
+        draw.text((box[0] + pad_x, box[1] + pad_y - t), label, fill="white", font=font)
+
     img.save(outlined_output_path)
     print(f"{len(detected_elements)} figure(s) detected -> {outlined_output_path}")
 
@@ -205,12 +239,11 @@ def process_page(image_path, outlined_output_path, crops_output_dir, conf=0.5):
     base_name = os.path.splitext(os.path.basename(image_path))[0]
     for idx, element in enumerate(detected_elements, start=1):
         xmin, ymin, xmax, ymax = element["box"]
-        xmin, ymin, xmax, ymax = pad_box(xmin, ymin, xmax, ymax, img_bgr.shape, pad=20)
+        xmin, ymin, xmax, ymax = pad_box(xmin, ymin, xmax, ymax, img_bgr.shape, pad=10)
         cropped_segment = img_bgr[ymin:ymax, xmin:xmax]
         output_filename = f"{crops_output_dir}/{base_name}_crop_{idx}.png"
         cv2.imwrite(output_filename, cropped_segment)
         print(f"-> Saved index {idx}: {output_filename} (Bounding Box: {xmin}, {ymin}, {xmax}, {ymax})")
-
 
 def generate_crop_pngs_from_pdf():
     for pdf_path in target_folder.glob("*.pdf"):
@@ -232,6 +265,5 @@ def generate_crop_pngs_from_pdf():
                 outlined_output_path=f"{outlined_folder}/page_{i+1}.png",
                 crops_output_dir=crops_folder,
             )
-
 
 generate_crop_pngs_from_pdf()

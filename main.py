@@ -10,7 +10,7 @@ app.include_router(subjects.router)
 app.include_router(questions.router)
 app.include_router(topics.router)
 
-allow_origins=["https://smartqbank.netlify.app", "http://localhost:5173"]
+allow_origins=["https://smartqbank.netlify.app", "http://localhost:5173", "http://192.168.0.168:5173"]
 
 app.add_middleware(
     CORSMiddleware,

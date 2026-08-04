@@ -1,5 +1,4 @@
 from sqlalchemy import Column, Integer, String, Boolean, ForeignKey
-from sqlalchemy.orm import DeclarativeBase
 from database import Base
 from sqlalchemy.dialects.postgresql import JSON
 
@@ -11,6 +10,13 @@ class Subject(Base):
     department = Column(String, nullable=False, index=True)
     semester = Column(Integer, nullable=False, index=True)
     regulation_code = Column(String, nullable=False, index=True)
+       
+class Topic(Base):
+    __tablename__ = "topics"
+    id = Column(Integer, primary_key=True, index=True)
+    subject_code = Column(String, nullable=False)
+    unit = Column(Integer, nullable=False)
+    topic = Column(String, nullable=False, index=True)
 
 class Question(Base):
     __tablename__ = "questions"
@@ -22,7 +28,7 @@ class Question(Base):
     year = Column(Integer, nullable=False)
     marks = Column(Integer, nullable=False)
     image_urls = Column(JSON, nullable=True)
-    topic = Column(String, nullable=False, index=True)
+    topic_id = Column(Integer, nullable=False, index=True)
 
 class User(Base):
     __tablename__ = "users"
@@ -37,10 +43,3 @@ class PaperAppearances(Base):
     question_id = Column(Integer, ForeignKey("questions.id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
     year = Column(Integer, nullable=False)
     paper_name = Column(String, nullable=False, index=True)
-   
-class Topic(Base):
-    __tablename__ = "topics"
-    id = Column(Integer, primary_key=True, index=True)
-    subject_code = Column(String, nullable=False)
-    unit = Column(Integer, nullable=False)
-    topic = Column(String, nullable=False)
