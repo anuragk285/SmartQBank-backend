@@ -39,6 +39,7 @@ class QuestionResponse(BaseModel):
     marks: int
     image_urls: List[str] = []
     topic: str
+    topic_id: int
 
     class Config:
         from_attributes = True

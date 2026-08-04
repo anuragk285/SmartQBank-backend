@@ -38,7 +38,7 @@ def build_cache_key(**kwargs) -> str:
 @router.get("/{subject_id}/questions", response_model=PaginatedQuestions)
 async def get_all_questions(subject_id: int,
                       cache: CacheBackendDep,
-                      topic_ids: Optional[List[int]] = None,
+                      topic_ids: Optional[List[int]] = Query(None),
                       units: Optional[List[int]] = Query(None),
                       difficulty: Optional[List[str]] = Query(None),
                       marks: Optional[List[int]] = Query(None),
@@ -57,7 +57,6 @@ async def get_all_questions(subject_id: int,
             return cached
     except Exception as e:     
         print(f"Cache error")
-
     query = (db.query(Question).join(Subject, Question.subject_code == Subject.subject_code).filter(Subject.id == subject_id))
     if topic_ids:
         query = query.filter(Question.topic_id.in_(topic_ids))
@@ -83,6 +82,7 @@ async def get_all_questions(subject_id: int,
         q_data = q.__dict__.copy() if hasattr(q, "__dict__") else dict(q)
         topic_id = getattr(q, "topic_id", None)
         q_data["topic"] = topic_map.get(topic_id)
+        q_data["topic_id"] = topic_id
         formatted_questions.append(QuestionResponse.model_validate(q_data).model_dump())
     result = {
         "questions": formatted_questions,

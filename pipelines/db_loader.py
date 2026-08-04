@@ -39,8 +39,8 @@ def parse_difficulty(difficulty_level: int):
     elif difficulty_level <= 6: return 'Hard'
     return 'None'
 
-def get_topic_id(topic: str, db: Session):
-    db_topic = db.query(Topic).filter(Topic.topic == topic).first()
+def get_topic_id(topic: str, subject_code: str, db: Session):
+    db_topic = db.query(Topic).filter(Topic.topic == topic, Topic.subject_code == subject_code).first()
     if db_topic:
         return db_topic.id
     else:
@@ -73,7 +73,7 @@ def db_loader(path='pipelines/extracted_data.json'):
             question_list = paper['questions']
             paper_info = paper['paperInfo']
             for q in question_list:
-                topic_id = get_topic_id(q['topic'], db)
+                topic_id = get_topic_id(q['topic'], q['subject_code'], db)
                 question = QuestionCreate(text=q['text'],
                                         subject_code=q['subject_code'],
                                         difficulty=parse_difficulty(q['difficulty_level']),
