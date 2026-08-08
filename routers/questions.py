@@ -1,14 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from schemas import QuestionResponse, PaginatedQuestions
-from models import Question, Subject
-from sqlalchemy.orm import Session
+from models import Question, Subject, Topic
+from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db
 from typing import List, Optional
-from sqlalchemy import case, asc, desc
+from sqlalchemy import case, asc, desc, select, func
 import json, hashlib
 from redis_fastapi import CacheBackendDep
-from routers.topics import get_topic
-
 
 router = APIRouter(
     prefix = "/api/subjects",
@@ -46,7 +44,7 @@ async def get_all_questions(subject_id: int,
                       sort_order: str = Query("asc", pattern="^(asc|desc)$"),
                       page: int = Query(1, ge=1),
                       page_size: int = Query(10, ge=1, le=50),
-                      db: Session = Depends(get_db)):
+                      db: AsyncSession = Depends(get_db)):
     try:
         cache_key = build_cache_key(
             subject_id=subject_id, topic_ids=topic_ids, units=units, difficulty=difficulty,
@@ -57,39 +55,49 @@ async def get_all_questions(subject_id: int,
             return cached
     except Exception as e:     
         print(f"Cache error")
-    query = (db.query(Question).join(Subject, Question.subject_code == Subject.subject_code).filter(Subject.id == subject_id))
+    stmt = select(Question).join(Subject, Question.subject_code == Subject.subject_code).where(Subject.id == subject_id)
     if topic_ids:
-        query = query.filter(Question.topic_id.in_(topic_ids))
+        stmt = stmt.where(Question.topic_id.in_(topic_ids))
     if units:
-        query = query.filter(Question.unit.in_(units))
+        stmt = stmt.where(Question.unit.in_(units))
     if marks:
-        query = query.filter(Question.marks.in_(marks))
+        stmt = stmt.where(Question.marks.in_(marks))
     if difficulty:
-        query = query.filter(Question.difficulty.in_(difficulty))
-
+        stmt = stmt.where(Question.difficulty.in_(difficulty))
+    
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_res = await db.execute(count_stmt)
+    total = total_res.scalar_one()
     if sort_by:
             column = SORTABLE_COLUMNS.get(sort_by.lower())
             if column is None:
                 raise HTTPException(status_code=400, detail=f"Cannot sort by '{sort_by}'")
-            query = query.order_by(desc(column) if sort_order == "desc" else asc(column))
+            stmt = stmt.order_by(desc(column) if sort_order == "desc" else asc(column))
+    stmt = stmt.offset((page - 1) * page_size).limit(page_size)
+    result = await db.execute(stmt)
+    questions = result.scalars().all()
 
-    total = query.count()
-    questions = query.offset((page - 1) * page_size).limit(page_size).all()
+    unique_topic_ids = {q.topic_id for q in questions if q.topic_id is not None}
+    topic_map = {}
+    if unique_topic_ids:
+        topic_stmt = select(Topic.id, Topic.topic).where(Topic.id.in_(unique_topic_ids))
+        topic_res = await db.execute(topic_stmt)
+        topic_map = {id: topic for id, topic in topic_res.all()}
+
     formatted_questions = []
-    unique_topic_ids = {getattr(q, "topic_id", None) for q in questions if getattr(q, "topic_id", None)}
-    topic_map = {topic_id: get_topic(topic_id=topic_id, db=db).topic for topic_id in unique_topic_ids}
     for q in questions:
-        q_data = q.__dict__.copy() if hasattr(q, "__dict__") else dict(q)
-        topic_id = getattr(q, "topic_id", None)
-        q_data["topic"] = topic_map.get(topic_id)
-        q_data["topic_id"] = topic_id
+        q_data = {
+            column.name: getattr(q, column.name) 
+            for column in q.__table__.columns
+        }
+        q_data["topic"] = topic_map.get(q.topic_id)
         formatted_questions.append(QuestionResponse.model_validate(q_data).model_dump())
     result = {
         "questions": formatted_questions,
         "total": total,
         "page": page,
         "page_size": page_size,
-        "has_more": page * page_size < total,
+        "has_more": (page * page_size) < total,
     }
     try:
         await cache.set(cache_key, result, ttl=300, eviction_group="questions")
