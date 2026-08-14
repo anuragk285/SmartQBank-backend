@@ -24,7 +24,8 @@ async def get_subjects(department: str, semester: int, regulation_code: str, db:
                         department=subject.department,
                         semester=subject.semester,
                         regulation_code=subject.regulation_code,
-                        question_count=count)
+                        question_count=count,
+                        subject_content_id=subject.subject_content_id)
         for subject, count in stmt_results
     ]
     return results

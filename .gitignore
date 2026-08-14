@@ -43,6 +43,9 @@ pipelines/topic_pdfs/
 pipelines/uploads/
 pipelines/*.json
 pipelines/extracted_topics/
+pipelines/sc.py
+pipelines/sg_filler_in_sc.py
+pipelines/subject_backfill.py
 # questions data
 
 pipelines/*.json
