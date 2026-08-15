@@ -1,7 +1,8 @@
+from collections import defaultdict
 from fastapi import APIRouter, Depends, HTTPException
 from database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
-from models import Topic, Subject, CanonicalTopic, Question
+from models import Topic, Subject, CanonicalTopic, Question, SubjectContent
 from sqlalchemy import select, func
 from schemas import TopicResponse
 from typing import List
@@ -23,13 +24,28 @@ async def get_topics(subject_id: int, db: AsyncSession = Depends(get_db)):
     return topics
 
 @router.get("/topics/{subject_id}/important-topics")
-async def get_important_topics(
-    subject_id: int,
-    db: AsyncSession = Depends(get_db),
-):
+async def get_important_topics(subject_id: int, db: AsyncSession = Depends(get_db)):
     subject = await db.get(Subject, subject_id)
     if subject is None:
         raise HTTPException(status_code=404, detail="Subject not found")
+
+    subject_content = await db.get(SubjectContent, subject.subject_content_id)
+    group_id = subject_content.subject_group_id
+    if group_id is None:
+        raise HTTPException(status_code=400, detail="Subject has no subject_group mapping")
+
+    # total distinct papers analyzed across ALL regulations under this subject_group
+    # a "paper" = one (year, regulation_code) combo
+    total_papers_stmt = (
+        select(func.count(func.distinct(
+            func.concat(Question.year, "_", Topic.regulation_code)
+        )))
+        .select_from(Question)
+        .join(Topic, Topic.id == Question.topic_id)
+        .join(SubjectContent, SubjectContent.id == Topic.subject_content_id)
+        .where(SubjectContent.subject_group_id == group_id)
+    )
+    total_papers = (await db.execute(total_papers_stmt)).scalar() or 1
 
     group_key = func.coalesce(Topic.canonical_topic_id, -Topic.id)
     topic_label = func.coalesce(CanonicalTopic.label, func.min(Topic.topic))
@@ -40,26 +56,114 @@ async def get_important_topics(
             topic_label.label("topic_label"),
             func.count(Question.id).label("question_count"),
             func.coalesce(func.sum(Question.marks), 0).label("total_marks"),
-            func.count(func.distinct(Question.year)).label("years_appeared"),
+            func.count(func.distinct(
+                func.concat(Question.year, "_", Topic.regulation_code)
+            )).label("years_appeared"),
         )
         .select_from(Topic)
+        .join(SubjectContent, SubjectContent.id == Topic.subject_content_id)
         .join(Question, Question.topic_id == Topic.id)
         .outerjoin(CanonicalTopic, CanonicalTopic.id == Topic.canonical_topic_id)
-        .where(Topic.subject_content_id == subject.subject_content_id)
+        .where(SubjectContent.subject_group_id == group_id)
         .group_by(group_key, CanonicalTopic.label)
-        .order_by(func.count(Question.id).desc())
+        .order_by(func.coalesce(func.sum(Question.marks), 0).desc())
     )
 
     rows = (await db.execute(stmt)).all()
-    total_questions = sum(r.question_count for r in rows)
 
-    return [
+    # topic_ids per group, across all regulations in this subject_group
+    topic_id_stmt = (
+        select(
+            func.coalesce(Topic.canonical_topic_id, -Topic.id).label("group_key"),
+            Topic.id,
+        )
+        .select_from(Topic)
+        .join(SubjectContent, SubjectContent.id == Topic.subject_content_id)
+        .where(SubjectContent.subject_group_id == group_id)
+    )
+    topic_id_rows = (await db.execute(topic_id_stmt)).all()
+
+    topic_ids_by_group: dict[int, list[int]] = defaultdict(list)
+    for r in topic_id_rows:
+        topic_ids_by_group[r.group_key].append(r.id)
+
+    return {
+    "total_papers_analyzed": total_papers,
+    "topics": [
         {
             "topic": r.topic_label,
             "question_count": r.question_count,
-            "total_marks": r.total_marks,
             "years_appeared": r.years_appeared,
-            "weightage_percent": round(r.question_count * 100 / total_questions, 1) if total_questions else 0,
+            "avg_marks_per_paper": round(r.total_marks / total_papers, 1),
+            "avg_marks_per_appearance": round(r.total_marks / r.years_appeared, 1) if r.years_appeared else 0,
+            "topic_ids": topic_ids_by_group[r.group_key],
         }
         for r in rows
-    ]
+    ],
+}
+
+# @router.get("/topics/{subject_id}/important-topics")
+# async def get_important_topics(subject_id: int, db: AsyncSession = Depends(get_db)):
+#     subject = await db.get(Subject, subject_id)
+#     if subject is None:
+#         raise HTTPException(status_code=404, detail="Subject not found")
+
+#     sc_id = subject.subject_content_id
+
+#     total_years_stmt = (
+#         select(func.count(func.distinct(Question.year)))
+#         .join(Topic, Topic.id == Question.topic_id)
+#         .where(Topic.subject_content_id == sc_id)
+#     )
+#     total_years = (await db.execute(total_years_stmt)).scalar() or 1
+
+#     group_key = func.coalesce(Topic.canonical_topic_id, -Topic.id)
+#     topic_label = func.coalesce(CanonicalTopic.label, func.min(Topic.topic))
+
+#     stmt = (
+#         select(
+#             group_key.label("group_key"),
+#             topic_label.label("topic_label"),
+#             Topic.unit.label("unit"),                       # real column now, not aggregated
+#             func.count(Question.id).label("question_count"),
+#             func.coalesce(func.sum(Question.marks), 0).label("total_marks"),
+#             func.count(func.distinct(Question.year)).label("years_appeared"),
+#         )
+#         .select_from(Topic)
+#         .join(Question, Question.topic_id == Topic.id)
+#         .outerjoin(CanonicalTopic, CanonicalTopic.id == Topic.canonical_topic_id)
+#         .where(Topic.subject_content_id == sc_id)
+#         .group_by(group_key, CanonicalTopic.label, Topic.unit)   # unit added here
+#         .order_by(func.coalesce(func.sum(Question.marks), 0).desc())
+#     )
+
+#     rows = (await db.execute(stmt)).all()
+#     total_marks_pool = sum(r.total_marks for r in rows) or 1
+
+#     # topic_ids also grouped by (group_key, unit) to stay consistent with rows above
+#     topic_id_stmt = (
+#         select(
+#             func.coalesce(Topic.canonical_topic_id, -Topic.id).label("group_key"),
+#             Topic.unit,
+#             Topic.id,
+#         )
+#         .where(Topic.subject_content_id == sc_id)
+#     )
+#     topic_id_rows = (await db.execute(topic_id_stmt)).all()
+
+#     topic_ids_by_group: dict[tuple[int, int], list[int]] = defaultdict(list)
+#     for r in topic_id_rows:
+#         topic_ids_by_group[(r.group_key, r.unit)].append(r.id)
+
+#     return [
+#         {
+#             "topic": r.topic_label,
+#             "unit": r.unit,
+#             "question_count": r.question_count,
+#             "years_appeared": r.years_appeared,
+#             "avg_marks_per_year": round(r.total_marks / total_years, 1),
+#             "marks_weightage_percent": round(r.total_marks * 100 / total_marks_pool, 1),
+#             "topic_ids": topic_ids_by_group[(r.group_key, r.unit)],
+#         }
+#         for r in rows
+#     ]

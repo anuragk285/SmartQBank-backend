@@ -105,3 +105,29 @@ async def get_all_questions(subject_id: int,
         print(f"Cache set error: {e}")
     return result
 
+@router.get('/{subject_id}/topic-questions', response_model=List[QuestionResponse])
+async def get_questions_on_topic(subject_id: int, topic_ids: Optional[List[int]] = Query(default=None), db: AsyncSession = Depends(get_db)):
+    if not topic_ids:
+        return []
+    stmt = select(Question).where(Question.topic_id.in_(topic_ids))
+        
+    result = await db.execute(stmt)
+    questions = result.scalars().all()
+
+    unique_topic_ids = {q.topic_id for q in questions if q.topic_id is not None}
+    topic_map = {}
+    if unique_topic_ids:
+        topic_stmt = select(Topic.id, Topic.topic).where(Topic.id.in_(unique_topic_ids))
+        topic_res = await db.execute(topic_stmt)
+        topic_map = {id: topic for id, topic in topic_res.all()}
+
+    formatted_questions = []
+    for q in questions:
+        q_data = {
+            column.name: getattr(q, column.name) 
+            for column in q.__table__.columns
+        }
+        q_data["topic"] = topic_map.get(q.topic_id)
+        formatted_questions.append(QuestionResponse.model_validate(q_data).model_dump())
+
+    return formatted_questions

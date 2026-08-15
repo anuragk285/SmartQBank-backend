@@ -113,6 +113,10 @@ class PaginatedQuestions(BaseModel):
 class ImportantTopicOut(BaseModel):
     topic: str
     question_count: int
-    total_marks: int
+    avg_marks_per_paper: float
     years_appeared: int
-    weightage_percent: float
+    topic_ids: Optional[List[int]] = None
+
+class ImportantTopicOutWithTotalPapers:
+    total_papers_analyzed: int
+    topics: List[ImportantTopicOut]

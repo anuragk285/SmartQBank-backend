@@ -7,7 +7,7 @@ class Subject(Base):
     __tablename__ = "subjects"
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
-    subject_code = Column(String, nullable=False, index=True)  # NOT globally unique — same code can repeat across departments
+    subject_code = Column(String, nullable=False, index=True) 
     department = Column(String, nullable=False, index=True)
     semester = Column(Integer, nullable=False, index=True)
     regulation_code = Column(String, nullable=False, index=True)
