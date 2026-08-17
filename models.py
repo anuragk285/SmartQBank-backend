@@ -11,8 +11,16 @@ class Subject(Base):
     department = Column(String, nullable=False, index=True)
     semester = Column(Integer, nullable=False, index=True)
     regulation_code = Column(String, nullable=False, index=True)
-    subject_content_id = Column(Integer, ForeignKey("subject_contents.id"), nullable=False, index=True)  # replaces subject_group_id
+    subject_content_id = Column(Integer, ForeignKey("subject_contents.id"), nullable=True, index=True)  
     content = relationship("SubjectContent", back_populates="subjects")
+    topics = relationship(
+        "Topic",
+        primaryjoin="and_("
+                    "Subject.subject_code == foreign(Topic.subject_code), "
+                    "Subject.regulation_code == foreign(Topic.regulation_code)"
+                    ")",
+        viewonly=True  # Use viewonly=True if you are just using this to query/read data in the grouper
+    )
     __table_args__ = (
         UniqueConstraint("subject_code", "department", "regulation_code", name="uq_subject_code_dept_regulation"),
     )

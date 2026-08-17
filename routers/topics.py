@@ -1,5 +1,5 @@
 from collections import defaultdict
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from models import Topic, Subject, CanonicalTopic, Question, SubjectContent
@@ -24,18 +24,34 @@ async def get_topics(subject_id: int, db: AsyncSession = Depends(get_db)):
     return topics
 
 @router.get("/topics/{subject_id}/important-topics")
-async def get_important_topics(subject_id: int, db: AsyncSession = Depends(get_db)):
+async def get_important_topics(
+    subject_id: int,
+    crossRegulation: bool = Query(
+        True,
+        description="If true, aggregate across every regulation in the subject's group. "
+                    "If false, scope to just this subject's own regulation.",
+    ),
+    db: AsyncSession = Depends(get_db),
+):
     subject = await db.get(Subject, subject_id)
     if subject is None:
         raise HTTPException(status_code=404, detail="Subject not found")
 
-    subject_content = await db.get(SubjectContent, subject.subject_content_id)
-    group_id = subject_content.subject_group_id
-    if group_id is None:
-        raise HTTPException(status_code=400, detail="Subject has no subject_group mapping")
+    if subject.subject_content_id is None:
+        raise HTTPException(status_code=400, detail="Subject has no subject_content mapping")
 
-    # total distinct papers analyzed across ALL regulations under this subject_group
-    # a "paper" = one (year, regulation_code) combo
+    subject_content = await db.get(SubjectContent, subject.subject_content_id)
+    if subject_content is None:
+        raise HTTPException(status_code=400, detail="Subject has no subject_content mapping")
+
+    if crossRegulation:
+        group_id = subject_content.subject_group_id
+        if group_id is None:
+            raise HTTPException(status_code=400, detail="Subject has no subject_group mapping")
+        scope_filter = SubjectContent.subject_group_id == group_id
+    else:
+        scope_filter = SubjectContent.id == subject_content.id
+
     total_papers_stmt = (
         select(func.count(func.distinct(
             func.concat(Question.year, "_", Topic.regulation_code)
@@ -43,9 +59,11 @@ async def get_important_topics(subject_id: int, db: AsyncSession = Depends(get_d
         .select_from(Question)
         .join(Topic, Topic.id == Question.topic_id)
         .join(SubjectContent, SubjectContent.id == Topic.subject_content_id)
-        .where(SubjectContent.subject_group_id == group_id)
+        .where(scope_filter)
     )
     total_papers = (await db.execute(total_papers_stmt)).scalar() or 1
+    if total_papers == 0:
+        return {"total_papers_analyzed": 0, "topics": []}
 
     group_key = func.coalesce(Topic.canonical_topic_id, -Topic.id)
     topic_label = func.coalesce(CanonicalTopic.label, func.min(Topic.topic))
@@ -64,14 +82,12 @@ async def get_important_topics(subject_id: int, db: AsyncSession = Depends(get_d
         .join(SubjectContent, SubjectContent.id == Topic.subject_content_id)
         .join(Question, Question.topic_id == Topic.id)
         .outerjoin(CanonicalTopic, CanonicalTopic.id == Topic.canonical_topic_id)
-        .where(SubjectContent.subject_group_id == group_id)
+        .where(scope_filter)
         .group_by(group_key, CanonicalTopic.label)
         .order_by(func.coalesce(func.sum(Question.marks), 0).desc())
     )
 
     rows = (await db.execute(stmt)).all()
-
-    # topic_ids per group, across all regulations in this subject_group
     topic_id_stmt = (
         select(
             func.coalesce(Topic.canonical_topic_id, -Topic.id).label("group_key"),
@@ -79,7 +95,7 @@ async def get_important_topics(subject_id: int, db: AsyncSession = Depends(get_d
         )
         .select_from(Topic)
         .join(SubjectContent, SubjectContent.id == Topic.subject_content_id)
-        .where(SubjectContent.subject_group_id == group_id)
+        .where(scope_filter)
     )
     topic_id_rows = (await db.execute(topic_id_stmt)).all()
 
@@ -88,19 +104,19 @@ async def get_important_topics(subject_id: int, db: AsyncSession = Depends(get_d
         topic_ids_by_group[r.group_key].append(r.id)
 
     return {
-    "total_papers_analyzed": total_papers,
-    "topics": [
-        {
-            "topic": r.topic_label,
-            "question_count": r.question_count,
-            "years_appeared": r.years_appeared,
-            "avg_marks_per_paper": round(r.total_marks / total_papers, 1),
-            "avg_marks_per_appearance": round(r.total_marks / r.years_appeared, 1) if r.years_appeared else 0,
-            "topic_ids": topic_ids_by_group[r.group_key],
-        }
-        for r in rows
-    ],
-}
+        "cross_regulation": crossRegulation,
+        "total_papers_analyzed": total_papers,
+        "topics": [
+            {
+                "topic": r.topic_label,
+                "question_count": r.question_count,
+                "years_appeared": r.years_appeared,
+                "avg_marks_per_paper": round(r.total_marks / total_papers, 1),
+                "topic_ids": topic_ids_by_group[r.group_key],
+            }
+            for r in rows
+        ],
+    }
 
 # @router.get("/topics/{subject_id}/important-topics")
 # async def get_important_topics(subject_id: int, db: AsyncSession = Depends(get_db)):
@@ -138,7 +154,6 @@ async def get_important_topics(subject_id: int, db: AsyncSession = Depends(get_d
 #     )
 
 #     rows = (await db.execute(stmt)).all()
-#     total_marks_pool = sum(r.total_marks for r in rows) or 1
 
 #     # topic_ids also grouped by (group_key, unit) to stay consistent with rows above
 #     topic_id_stmt = (
@@ -155,15 +170,18 @@ async def get_important_topics(subject_id: int, db: AsyncSession = Depends(get_d
 #     for r in topic_id_rows:
 #         topic_ids_by_group[(r.group_key, r.unit)].append(r.id)
 
-#     return [
-#         {
-#             "topic": r.topic_label,
-#             "unit": r.unit,
-#             "question_count": r.question_count,
-#             "years_appeared": r.years_appeared,
-#             "avg_marks_per_year": round(r.total_marks / total_years, 1),
-#             "marks_weightage_percent": round(r.total_marks * 100 / total_marks_pool, 1),
-#             "topic_ids": topic_ids_by_group[(r.group_key, r.unit)],
-#         }
-#         for r in rows
-#     ]
+        
+
+#     return {
+#         "total_papers_analyzed": total_papers,
+#         "topics": [
+#             {
+#                 "topic": r.topic_label,
+#                 "question_count": r.question_count,
+#                 "years_appeared": r.years_appeared,
+#                 "avg_marks_per_paper": round(r.total_marks / total_papers, 1),
+#                 "topic_ids": topic_ids_by_group[r.group_key],
+#             }
+#             for r in rows
+#         ],
+#     }

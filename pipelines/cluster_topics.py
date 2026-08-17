@@ -58,7 +58,7 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("canonicalize_topics")
 
-GEMINI_MODEL = "gemini-3.5-flash"
+GEMINI_MODEL = "gemini-3.6-flash"
 MAX_CONCURRENT_GROUPS = 3          # subject groups processed in parallel
 SAMPLE_QUESTIONS_PER_TOPIC = 2     # grounds the LLM with real exam-question phrasing
 MAX_TOPICS_PER_CALL = 200          # safety valve, see warning in process_group()
@@ -67,12 +67,6 @@ ENABLE_EMBEDDING_PREFILTER = os.getenv("ENABLE_EMBEDDING_PREFILTER", "false").lo
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-m3")
 PREFILTER_SIMILARITY_THRESHOLD = 0.93  # conservative on purpose: only catches near-identical strings,
                                         # NOT the hard semantic cases — that's still Gemini's job
-
-# --------------------------------------------------------------------------
-# Gemini client (lazy singleton so importing this module doesn't require
-# GEMINI_API_KEY to already be set)
-# --------------------------------------------------------------------------
-
 _gemini_client: Optional[genai.Client] = None
 
 
