@@ -9,4 +9,4 @@ python-multipart==0.0.32
 python-dotenv==1.2.2
 fastapi-redis-sdk==0.7.0
 asyncpg==0.31.0
-googel-genai==2.11.0
+google-genai==2.11.0
