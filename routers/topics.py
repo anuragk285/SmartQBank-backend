@@ -15,6 +15,9 @@ from database import get_db
 from models import Topic, Subject, CanonicalTopic, Question, SubjectContent, AITopicDescription
 from schemas import TopicResponse, TopicDescription
 
+import logging
+logger = logging.getLogger(__name__)
+
 router = APIRouter(
     prefix='/api',
     tags=["Topics"]
@@ -40,17 +43,22 @@ Field rules:
   must remember. Include only if the topic has genuinely separable facts.
 - table: include ONLY if the topic is inherently a comparison between two
   or more things (e.g. "OSI vs TCP/IP"). Omit for non-comparative topics.
-- mermaid_diagram: include ONLY if the topic is a process, sequence,
-  architecture, or flow that benefits from a visual (e.g. algorithm steps,
-  a protocol handshake, a system architecture). Use valid Mermaid syntax —
-  flowchart TD/LR for processes, sequenceDiagram for exchanges between
-  parties, classDiagram or erDiagram for structures. Omit for purely
-  definitional topics.
-- formula: include ONLY if there's a specific formula, equation, or precise
-  technical definition worth highlighting on its own.
-- exam_tip: one sentence on how this topic is typically asked (e.g. "usually
-  a derivation question" / "commonly a 2-mark definition"). Include only if
-  you're confident about the pattern — omit rather than guess.
+- mermaid_diagram: include this for any topic that has a sequence,
+  multi-step process, protocol exchange, algorithm, or architecture with
+  interacting parts — err toward including it whenever the topic has 3 or
+  more ordered steps or components. Only omit it for topics that are a
+  single flat definition with no internal steps (e.g. "primary key",
+  "atomicity"). When you include it, follow these syntax rules exactly:
+  - Use "flowchart TD" for steps/stages, "sequenceDiagram" for exchanges
+    between named parties.
+  - 3-6 nodes maximum. Each node label under 4 words.
+  - Every node must use bracket syntax, e.g. A[Client sends request] --> B[Server processes].
+  - Never use parentheses, colons, or quotation marks inside a node label —
+    plain words only, they break the parser.
+- formula: include ONLY if there's a specific formula or precise technical
+  definition worth highlighting on its own.
+- exam_tip: one sentence on how this topic is typically asked. Include
+  only if you're confident about the pattern — omit rather than guess.
 
 Do not invent facts, formulas, or university-specific details you're not
 certain about. Leave a field out entirely rather than fabricate content for it."""
@@ -65,10 +73,8 @@ def get_genai_client() -> genai.Client:
 
 async def generate_topic_description_async(subject_name: str, topic_name: str) -> TopicDescription:
     client = get_genai_client()
-    
-    # Native async generation using client.aio
     response = await client.aio.models.generate_content(
-        model="gemini-3.5-flash",  # Update to standard release model if needed
+        model="gemini-3.5-flash-lite",
         contents=f"Subject: {subject_name}\nTopic: {topic_name}",
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
@@ -193,7 +199,6 @@ async def get_important_topics(
 
 @router.get("/topics/{topic_id}/ai-description", response_model=TopicDescription)
 async def get_ai_description(topic_id: int, db: AsyncSession = Depends(get_db)):
-    # 1. Fetch topic with subject details
     stmt = (
         select(Topic)
         .options(selectinload(Topic.subject_content))
@@ -214,14 +219,18 @@ async def get_ai_description(topic_id: int, db: AsyncSession = Depends(get_db)):
         return TopicDescription.model_validate(cached.payload)
 
     # 3. Generate description using native async client
-    subject_name = topic.subject_content.name if topic.subject_content else ""
 
     try:
+        subject_name = topic.subject_content.name if topic.subject_content else ""
+
         ai_result = await generate_topic_description_async(
             subject_name=subject_name,
             topic_name=topic.topic,
         )
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.exception("AI generation failed for topic_id=%s", topic_id)
         raise HTTPException(status_code=502, detail=f"AI Generation failed: {str(e)}")
 
     # 4. Save to cache with collision safety
