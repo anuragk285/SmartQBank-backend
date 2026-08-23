@@ -1,8 +1,8 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, UniqueConstraint, Float
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, UniqueConstraint, Float, DateTime
 from database import Base
 from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.orm import relationship
-
+from datetime import datetime
 class Subject(Base):
     __tablename__ = "subjects"
     id = Column(Integer, primary_key=True, index=True)
@@ -113,3 +113,10 @@ class SubjectContent(Base):
     __table_args__ = (
         UniqueConstraint("subject_code", "regulation_code", name="uq_subject_content_code_regulation"),
     )
+
+class AITopicDescription(Base):
+    __tablename__ = "ai_topic_descriptions"
+    id = Column(Integer, primary_key=True)
+    topic_id = Column(Integer, ForeignKey("topics.id"), unique=True, index=True)
+    payload = Column(JSON)
+    created_at = Column(DateTime, default=datetime.utcnow)

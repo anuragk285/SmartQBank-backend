@@ -1,6 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List
-from typing import Optional
+from typing import List, Optional
 
 class SubjectCreate(BaseModel):
     name: str
@@ -120,3 +119,21 @@ class ImportantTopicOut(BaseModel):
 class ImportantTopicOutWithTotalPapers:
     total_papers_analyzed: int
     topics: List[ImportantTopicOut]
+
+class TableBlock(BaseModel):
+    columns: list[str]
+    rows: list[list[str]]
+
+class TopicDescription(BaseModel):
+    summary: str
+    key_points: Optional[list[str]] = None
+    table: Optional[TableBlock] = None
+    mermaid_diagram: Optional[str] = None
+    formula: Optional[str] = None
+    exam_tip: Optional[str] = None
+
+tool_schema = {
+    "name": "topic_description",
+    "description": "Structured exam-prep description of one topic",
+    "input_schema": TopicDescription.model_json_schema(),
+}
