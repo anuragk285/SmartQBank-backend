@@ -43,18 +43,62 @@ Field rules:
   must remember. Include only if the topic has genuinely separable facts.
 - table: include ONLY if the topic is inherently a comparison between two
   or more things (e.g. "OSI vs TCP/IP"). Omit for non-comparative topics.
-- mermaid_diagram: include this for any topic that has a sequence,
-  multi-step process, protocol exchange, algorithm, or architecture with
-  interacting parts — err toward including it whenever the topic has 3 or
-  more ordered steps or components. Only omit it for topics that are a
-  single flat definition with no internal steps (e.g. "primary key",
-  "atomicity"). When you include it, follow these syntax rules exactly:
-  - Use "flowchart TD" for steps/stages, "sequenceDiagram" for exchanges
-    between named parties.
-  - 3-6 nodes maximum. Each node label under 4 words.
-  - Every node must use bracket syntax, e.g. A[Client sends request] --> B[Server processes].
-  - Never use parentheses, colons, or quotation marks inside a node label —
-    plain words only, they break the parser.
+- mermaid_diagram:- diagram_type / mermaid_diagram: a diagram is the exception, not the
+  default — most topics should NOT get one. Only include a diagram if the
+  topic's structure genuinely and unambiguously matches ONE of these four
+  shapes. If none fit, leave diagram_type and mermaid_diagram both null.
+  "flowchart" — a concrete ordered process with 3-6 discrete steps
+  happening one after another (e.g. TCP handshake, a sorting pass, OS
+  process lifecycle). Use "flowchart TD" or "flowchart LR". Bracket syntax
+  only: A[Step label] --> B[Next step]. No parentheses, colons, or quotes
+  inside labels.
+  "sequence" — a timed exchange of messages between 2+ named parties.
+  Use "sequenceDiagram" with participant lines and ->> arrows.
+  "venn" — two or more categories that genuinely overlap, where something
+  belongs to more than one category at once (e.g. NP-Complete = NP ∩
+  NP-Hard). Syntax:
+    venn-beta
+    set A["Label"]
+    set B["Label"]
+    union A,B["Shared label"]
+  Add a third set only for a genuine three-way overlap. Keep labels
+  under 4 words.
+  "treemap" — a strict nested hierarchy where each level sits entirely
+  inside the one above, with no overlap (e.g. Chomsky hierarchy: Type 3
+  is wholly inside Type 2, inside Type 1, inside Type 0; any
+  classification taxonomy). Syntax:
+    treemap-beta
+    "Outermost level"
+        "Next level in"
+            "Innermost level": 1
+  Nest by indentation only as many levels as the topic actually has.
+  Only the innermost leaf needs ": 1" — the number is required by the
+  syntax but carries no meaning here.
+
+  Reserve diagrams for topics that are commonly drawn in textbooks or
+  exams specifically because the relationship is hard to state in words
+  alone — protocol exchanges, complexity class relationships, grammar/
+  automata hierarchies, layered architectures. A flat definition (e.g.
+  "primary key", "atomicity") should never get one.
+  A concrete ordered process with 3-6 discrete steps happening one after 
+  another (e.g. TCP handshake, a sorting pass, OS
+  process lifecycle). Use "flowchart TD" or "flowchart LR". Bracket syntax
+  only: A[Step label] --> B[Next step]. No parentheses, colons, or quotes
+  inside labels.
+
+  If the process is explicitly iterative or cyclical — meaning the last
+  step's output feeds back into the first step for the next round (e.g.
+  a generic/prototyping software process model, PDCA/Deming cycle, any
+  process described in the source material as "repeats" or "iterates") —
+  you MUST add a closing edge from the last node back to the first node.
+  Do not draw a cyclical process as a straight line. Example:
+    flowchart TD
+    A[Communication] --> B[Planning]
+    B --> C[Modeling]
+    C --> D[Construction]
+    D --> E[Deployment]
+    E --> A
+  Label the closing edge if it helps clarity, e.g. E -->|Next iteration| A.
 - formula: include ONLY if there's a specific formula or precise technical
   definition worth highlighting on its own.
 - exam_tip: one sentence on how this topic is typically asked. Include
@@ -208,8 +252,6 @@ async def get_ai_description(topic_id: int, db: AsyncSession = Depends(get_db)):
     topic = result.scalar_one_or_none()
     if not topic:
         raise HTTPException(status_code=404, detail="Topic not found")
-
-    # 2. Check cache
     stmt_cache = select(AITopicDescription).where(
         AITopicDescription.topic_id == topic_id
     )
@@ -217,9 +259,6 @@ async def get_ai_description(topic_id: int, db: AsyncSession = Depends(get_db)):
     cached = result_cache.scalar_one_or_none()
     if cached:
         return TopicDescription.model_validate(cached.payload)
-
-    # 3. Generate description using native async client
-
     try:
         subject_name = topic.subject_content.name if topic.subject_content else ""
 
@@ -232,8 +271,6 @@ async def get_ai_description(topic_id: int, db: AsyncSession = Depends(get_db)):
     except Exception as e:
         logger.exception("AI generation failed for topic_id=%s", topic_id)
         raise HTTPException(status_code=502, detail=f"AI Generation failed: {str(e)}")
-
-    # 4. Save to cache with collision safety
     try:
         db.add(AITopicDescription(topic_id=topic_id, payload=ai_result.model_dump()))
         await db.commit()

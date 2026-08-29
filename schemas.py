@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional
+from enum import Enum
 
 class SubjectCreate(BaseModel):
     name: str
@@ -17,7 +18,7 @@ class SubjectResponse(BaseModel):
     semester: int
     regulation_code: str
     question_count: int
-    subject_content_id: int
+    subject_content_id: Optional[int] = None
     class Config:
         from_attributes = True 
 
@@ -30,6 +31,7 @@ class QuestionCreate(BaseModel):
     marks: int
     image_urls: List[str] = Field(default_factory=list)
     topic_id: int
+    regulation_code: Optional[str] = None
 
 class QuestionResponse(BaseModel):
     id: int
@@ -42,6 +44,7 @@ class QuestionResponse(BaseModel):
     image_urls: List[str] = []
     topic: str
     topic_id: int
+    regulation_code: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -60,7 +63,6 @@ class PaperAppearancesResponse(BaseModel):
     
     class Config:
         from_attributes = True
-
 
 class UserCreate(BaseModel):
     email: str
@@ -124,10 +126,21 @@ class TableBlock(BaseModel):
     columns: list[str]
     rows: list[list[str]]
 
+class DiagramType(str, Enum):
+    flowchart = "flowchart"
+    sequence = "sequence"
+    venn = "venn"
+    treemap = "treemap"
+
+class TableBlock(BaseModel):
+    columns: list[str]
+    rows: list[list[str]]
+
 class TopicDescription(BaseModel):
     summary: str
     key_points: Optional[list[str]] = None
     table: Optional[TableBlock] = None
+    diagram_type: Optional[DiagramType] = None
     mermaid_diagram: Optional[str] = None
     formula: Optional[str] = None
     exam_tip: Optional[str] = None

@@ -4,7 +4,7 @@ from models import Question, Subject, Topic
 from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db
 from typing import List, Optional
-from sqlalchemy import case, asc, desc, select, func
+from sqlalchemy import case, asc, desc, select, func, and_
 import json, hashlib
 from redis_fastapi import CacheBackendDep
 
@@ -35,6 +35,7 @@ def build_cache_key(**kwargs) -> str:
 
 @router.get("/{subject_id}/questions", response_model=PaginatedQuestions)
 async def get_all_questions(subject_id: int,
+                      regulation_code: str,
                       cache: CacheBackendDep,
                       topic_ids: Optional[List[int]] = Query(None),
                       units: Optional[List[int]] = Query(None),
@@ -55,7 +56,7 @@ async def get_all_questions(subject_id: int,
             return cached
     except Exception as e:     
         print(f"Cache error")
-    stmt = select(Question).join(Subject, Question.subject_code == Subject.subject_code).where(Subject.id == subject_id)
+    stmt = select(Question).join(Subject, and_(Question.subject_code == Subject.subject_code, Question.regulation_code == Subject.regulation_code)).where(Subject.id == subject_id)
     if topic_ids:
         stmt = stmt.where(Question.topic_id.in_(topic_ids))
     if units:

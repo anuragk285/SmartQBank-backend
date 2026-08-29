@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from schemas import SubjectResponse
 from models import Subject, Question
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, and_
 from database import get_db
 from typing import List
 
@@ -13,8 +13,8 @@ router = APIRouter(
 @router.get("/{department}/{semester}/{regulation_code}", response_model=List[SubjectResponse])
 async def get_subjects(department: str, semester: int, regulation_code: str, db: AsyncSession = Depends(get_db)):
     stmt = (select(Subject, func.count(Question.id).label("question_count"))
-            .outerjoin(Question, Question.subject_code == Subject.subject_code)
-            .where(Subject.department == department, Subject.semester == semester, Subject.regulation_code == regulation_code)
+            .outerjoin(Question, and_(Question.subject_code == Subject.subject_code, Question.regulation_code == Subject.regulation_code))
+            .where(Subject.regulation_code == regulation_code, Subject.department == department, Subject.semester == semester)
             .group_by(Subject.id))
     result = await db.execute(stmt)
     stmt_results = result.all()

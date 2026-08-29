@@ -3,6 +3,7 @@ from database import Base
 from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.orm import relationship
 from datetime import datetime
+
 class Subject(Base):
     __tablename__ = "subjects"
     id = Column(Integer, primary_key=True, index=True)
@@ -19,7 +20,7 @@ class Subject(Base):
                     "Subject.subject_code == foreign(Topic.subject_code), "
                     "Subject.regulation_code == foreign(Topic.regulation_code)"
                     ")",
-        viewonly=True  # Use viewonly=True if you are just using this to query/read data in the grouper
+        viewonly=True
     )
     __table_args__ = (
         UniqueConstraint("subject_code", "department", "regulation_code", name="uq_subject_code_dept_regulation"),
@@ -53,6 +54,7 @@ class Question(Base):
     marks = Column(Integer, nullable=False)
     image_urls = Column(JSON, nullable=True)
     topic_id = Column(Integer, ForeignKey("topics.id"), nullable=False, index=True)
+    regulation_code = Column(String, nullable=True)
     topic = relationship("Topic", back_populates="questions")
 
 class User(Base):
@@ -75,7 +77,7 @@ class SubjectGroup(Base):
     canonical_name = Column(String, nullable=False)
     department = Column(String, nullable=True)
 
-    subject_contents = relationship("SubjectContent", back_populates="group")  # was `subjects`
+    subject_contents = relationship("SubjectContent", back_populates="group")
     canonical_topics = relationship("CanonicalTopic", back_populates="subject_group")
 
 class CanonicalTopic(Base):
@@ -83,7 +85,7 @@ class CanonicalTopic(Base):
     id = Column(Integer, primary_key=True)
     subject_group_id = Column(Integer, ForeignKey("subject_groups.id"), nullable=False, index=True)
     label = Column(String, nullable=False)
-    description = Column(String, nullable=True)  # NEW — grounds future incremental Gemini calls + nice for the admin UI
+    description = Column(String, nullable=True) 
 
     subject_group = relationship("SubjectGroup", back_populates="canonical_topics")
     topics = relationship("Topic", back_populates="canonical_topic")
@@ -104,7 +106,7 @@ class SubjectContent(Base):
     name = Column(String, nullable=False)
     subject_code = Column(String, nullable=False, index=True)
     regulation_code = Column(String, nullable=False, index=True)
-    subject_group_id = Column(Integer, ForeignKey("subject_groups.id"), nullable=True)  # moved here, see note below
+    subject_group_id = Column(Integer, ForeignKey("subject_groups.id"), nullable=True)
 
     group = relationship("SubjectGroup", back_populates="subject_contents")
     subjects = relationship("Subject", back_populates="content")
