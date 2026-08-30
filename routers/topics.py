@@ -107,6 +107,9 @@ Field rules:
 Do not invent facts, formulas, or university-specific details you're not
 certain about. Leave a field out entirely rather than fabricate content for it."""
 
+running_regulation = {5: 'R22A'}
+RUNNING_REGULATIONS = set(running_regulation.values())
+
 
 def get_genai_client() -> genai.Client:
     api_key = os.getenv("GEMINI_API_KEY")
@@ -118,7 +121,7 @@ def get_genai_client() -> genai.Client:
 async def generate_topic_description_async(subject_name: str, topic_name: str) -> TopicDescription:
     client = get_genai_client()
     response = await client.aio.models.generate_content(
-        model="gemini-3.5-flash-lite",
+        model="gemini-3.5-flash",
         contents=f"Subject: {subject_name}\nTopic: {topic_name}",
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
@@ -131,18 +134,32 @@ async def generate_topic_description_async(subject_name: str, topic_name: str) -
     return response.parsed
 
 
+# @router.get("/topics/{subject_id}", response_model=List[TopicResponse])
+# async def get_topics(subject_id: int, db: AsyncSession = Depends(get_db)):
+#     stmt1 = select(Subject).where(Subject.id == subject_id)
+#     result1 = await db.execute(stmt1)
+#     subject_in_db = result1.scalar_one_or_none()
+#     if not subject_in_db:
+#         raise HTTPException(status_code=404, detail=f"Subject {subject_id} not found")
+        
+#     stmt2 = select(Topic).where(Topic.subject_code == subject_in_db.subject_code)
+#     result2 = await db.execute(stmt2)
+#     all_topics = result2.scalars().all()
+#     print(all_topics)
+#     return all_topics
+
 @router.get("/topics/{subject_id}", response_model=List[TopicResponse])
 async def get_topics(subject_id: int, db: AsyncSession = Depends(get_db)):
-    stmt1 = select(Subject).where(Subject.id == subject_id)
-    result1 = await db.execute(stmt1)
-    subject_in_db = result1.scalar_one_or_none()
+    subject_in_db = await db.get(Subject, subject_id)
     if not subject_in_db:
         raise HTTPException(status_code=404, detail=f"Subject {subject_id} not found")
         
-    stmt2 = select(Topic).where(Topic.subject_code == subject_in_db.subject_code)
+    if not subject_in_db.subject_content_id:
+        return []
+
+    stmt2 = select(Topic).where(Topic.subject_content_id == subject_in_db.subject_content_id)
     result2 = await db.execute(stmt2)
     return result2.scalars().all()
-
 
 @router.get("/topics/{subject_id}/important-topics")
 async def get_important_topics(
@@ -165,6 +182,15 @@ async def get_important_topics(
     if subject_content is None:
         raise HTTPException(status_code=400, detail="Subject has no subject_content mapping")
 
+    # If the subject belongs to a running regulation, force crossRegulation to True
+    # so historical questions from previous regulations are used for weightage predictions.
+    is_running_reg = (
+        getattr(subject, "regulation_code", None) in RUNNING_REGULATIONS
+        or subject_id in running_regulation
+    )
+    if is_running_reg:
+        crossRegulation = True
+
     if crossRegulation:
         group_id = subject_content.subject_group_id
         if group_id is None:
@@ -173,18 +199,23 @@ async def get_important_topics(
     else:
         scope_filter = SubjectContent.id == subject_content.id
 
+    # Filter out questions originating from running regulations
+    exclude_running_regs = (
+        Question.regulation_code.notin_(RUNNING_REGULATIONS) if RUNNING_REGULATIONS else True
+    )
+
     total_papers_stmt = (
         select(func.count(func.distinct(
-            func.concat(Question.year, "_", Topic.regulation_code)
+            func.concat(Question.year, "_", Question.regulation_code)
         )))
         .select_from(Question)
         .join(Topic, Topic.id == Question.topic_id)
         .join(SubjectContent, SubjectContent.id == Topic.subject_content_id)
-        .where(scope_filter)
+        .where(scope_filter, exclude_running_regs)
     )
-    total_papers = (await db.execute(total_papers_stmt)).scalar() or 1
+    total_papers = (await db.execute(total_papers_stmt)).scalar() or 0
     if total_papers == 0:
-        return {"total_papers_analyzed": 0, "topics": []}
+        return {"cross_regulation": crossRegulation, "total_papers_analyzed": 0, "topics": []}
 
     group_key = func.coalesce(Topic.canonical_topic_id, -Topic.id)
     topic_label = func.coalesce(CanonicalTopic.label, func.min(Topic.topic))
@@ -196,14 +227,14 @@ async def get_important_topics(
             func.count(Question.id).label("question_count"),
             func.coalesce(func.sum(Question.marks), 0).label("total_marks"),
             func.count(func.distinct(
-                func.concat(Question.year, "_", Topic.regulation_code)
+                func.concat(Question.year, "_", Question.regulation_code)
             )).label("years_appeared"),
         )
         .select_from(Topic)
         .join(SubjectContent, SubjectContent.id == Topic.subject_content_id)
         .join(Question, Question.topic_id == Topic.id)
         .outerjoin(CanonicalTopic, CanonicalTopic.id == Topic.canonical_topic_id)
-        .where(scope_filter)
+        .where(scope_filter, exclude_running_regs)
         .group_by(group_key, CanonicalTopic.label)
         .order_by(func.coalesce(func.sum(Question.marks), 0).desc())
     )
