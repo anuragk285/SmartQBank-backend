@@ -134,20 +134,6 @@ async def generate_topic_description_async(subject_name: str, topic_name: str) -
     return response.parsed
 
 
-# @router.get("/topics/{subject_id}", response_model=List[TopicResponse])
-# async def get_topics(subject_id: int, db: AsyncSession = Depends(get_db)):
-#     stmt1 = select(Subject).where(Subject.id == subject_id)
-#     result1 = await db.execute(stmt1)
-#     subject_in_db = result1.scalar_one_or_none()
-#     if not subject_in_db:
-#         raise HTTPException(status_code=404, detail=f"Subject {subject_id} not found")
-        
-#     stmt2 = select(Topic).where(Topic.subject_code == subject_in_db.subject_code)
-#     result2 = await db.execute(stmt2)
-#     all_topics = result2.scalars().all()
-#     print(all_topics)
-#     return all_topics
-
 @router.get("/topics/{subject_id}", response_model=List[TopicResponse])
 async def get_topics(subject_id: int, db: AsyncSession = Depends(get_db)):
     subject_in_db = await db.get(Subject, subject_id)
@@ -271,7 +257,6 @@ async def get_important_topics(
         ],
     }
 
-
 @router.get("/topics/{topic_id}/ai-description", response_model=TopicDescription)
 async def get_ai_description(topic_id: int, db: AsyncSession = Depends(get_db)):
     stmt = (
@@ -283,6 +268,8 @@ async def get_ai_description(topic_id: int, db: AsyncSession = Depends(get_db)):
     topic = result.scalar_one_or_none()
     if not topic:
         raise HTTPException(status_code=404, detail="Topic not found")
+
+    # 1. Fetch from cache
     stmt_cache = select(AITopicDescription).where(
         AITopicDescription.topic_id == topic_id
     )
@@ -292,7 +279,6 @@ async def get_ai_description(topic_id: int, db: AsyncSession = Depends(get_db)):
         return TopicDescription.model_validate(cached.payload)
     try:
         subject_name = topic.subject_content.name if topic.subject_content else ""
-
         ai_result = await generate_topic_description_async(
             subject_name=subject_name,
             topic_name=topic.topic,
@@ -303,9 +289,12 @@ async def get_ai_description(topic_id: int, db: AsyncSession = Depends(get_db)):
         logger.exception("AI generation failed for topic_id=%s", topic_id)
         raise HTTPException(status_code=502, detail=f"AI Generation failed: {str(e)}")
     try:
-        db.add(AITopicDescription(topic_id=topic_id, payload=ai_result.model_dump()))
+        payload_dict = ai_result.model_dump(mode="json")
+        new_cache = AITopicDescription(topic_id=topic_id, payload=payload_dict)
+        db.add(new_cache)
         await db.commit()
-    except IntegrityError:
+    except Exception as e:
         await db.rollback()
+        logger.error("DB Caching failed for topic_id=%s: %s", topic_id, str(e), exc_info=True)
 
     return ai_result
