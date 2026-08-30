@@ -16,7 +16,7 @@ from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 
-from models import Subject, SubjectGroup, Topic, CanonicalTopic, Base
+from models import SubjectContent, SubjectGroup, Topic, CanonicalTopic, Base
 
 load_dotenv()
 
@@ -344,6 +344,21 @@ async def print_coverage_report(session: AsyncSession):
         print(f"⚠️  Coverage gaps: {orphan_count} orphaned topic(s), "
               f"{ungrouped_count} topic(s) under ungrouped subjects — NOT processed this run.\n")
 
+async def print_coverage_report(session: AsyncSession):
+    orphan_count = (await session.execute(text("""
+        SELECT COUNT(*) FROM topics t
+        LEFT JOIN subject_contents sc ON sc.id = t.subject_content_id
+        WHERE sc.id IS NULL
+    """))).scalar()
+    ungrouped_count = (await session.execute(text("""
+        SELECT COUNT(DISTINCT t.id) FROM topics t
+        JOIN subject_contents sc ON sc.id = t.subject_content_id
+        WHERE sc.subject_group_id IS NULL
+    """))).scalar()
+    if orphan_count or ungrouped_count:
+        print(f"⚠️  Coverage gaps: {orphan_count} orphaned topic(s), "
+              f"{ungrouped_count} topic(s) under ungrouped subject contents — NOT processed this run.\n")
+
 async def main():
     parser = argparse.ArgumentParser()
     parser.parse_args()  # kept for future flags
@@ -354,20 +369,25 @@ async def main():
         await verify_and_update_schema(conn)
 
     async with AsyncSessionLocal() as session:
-        print_coverage_report(session=session)
-        result = await session.execute(select(SubjectGroup).options(selectinload(SubjectGroup.subjects)))
+        await print_coverage_report(session=session)
+        
+        # 1. Fetch all Subject Groups
+        result = await session.execute(select(SubjectGroup))
         subject_groups = result.scalars().all()
         print(f"📚 Loaded {len(subject_groups)} Subject Groups.\n")
 
         all_queue = []
         group_topics_map = {}
         for group in subject_groups:
-            codes = [s.subject_code for s in group.subjects if s.subject_code]
-            if not codes:
-                continue
-            topics_res = await session.execute(select(Topic).where(Topic.subject_code.in_(codes)))
+            # 2. Query topics through SubjectContent instead of group.subjects
+            topics_res = await session.execute(
+                select(Topic)
+                .join(SubjectContent, Topic.subject_content_id == SubjectContent.id)
+                .where(SubjectContent.subject_group_id == group.id)
+            )
             group_topics = topics_res.scalars().all()
             group_topics_map[group.id] = group_topics
+
             if len(group_topics) == 1:
                 precompute_group_embeddings(group_topics)
                 continue
@@ -386,40 +406,60 @@ async def main():
             group_topics = group_topics_map.get(group.id)
             if not group_topics:
                 continue
+
+            # Fetch all existing CanonicalTopics for this group to avoid duplicate constraint errors
+            ct_res = await session.execute(
+                select(CanonicalTopic).where(CanonicalTopic.subject_group_id == group.id)
+            )
+            existing_canonicals = ct_res.scalars().all()
+            
+            # Case-insensitive map of label -> CanonicalTopic object
+            canonical_map = {ct.label.strip().lower(): ct for ct in existing_canonicals}
+
             unassigned = [t for t in group_topics if t.canonical_topic_id is None]
             for t in unassigned:
-                standalone = CanonicalTopic(label=t.topic, subject_group_id=group.id)
-                session.add(standalone)
-                await session.flush()
-                t.canonical_topic_id = standalone.id
+                clean_label = t.topic.strip()
+                lookup_key = clean_label.lower()
+
+                if lookup_key in canonical_map:
+                    # Reuse existing canonical topic
+                    canonical_item = canonical_map[lookup_key]
+                else:
+                    # Create new canonical topic and cache it
+                    canonical_item = CanonicalTopic(label=clean_label, subject_group_id=group.id)
+                    session.add(canonical_item)
+                    await session.flush()  # Generates canonical_item.id
+                    canonical_map[lookup_key] = canonical_item
+
+                t.canonical_topic_id = canonical_item.id
                 t.match_status = "standalone"
                 t.match_confidence = 100.0
+
             if unassigned:
                 await session.commit()
 
-
-    print("\n🧹 Sweeping up orphaned and ungrouped topics...")
-    ungrouped_res = await session.execute(select(Topic).where(Topic.match_status == 'unmatched'))
-    leftover_topics = ungrouped_res.scalars().all()
-    
-    if leftover_topics:
-        print(f"  Generating embeddings for {len(leftover_topics)} leftover topic(s)...")
-        texts = [f"{t.subject_code or 'Unknown'} unit {t.unit}: {t.topic}" for t in leftover_topics]
-        vectors = embedding_model.encode(texts, convert_to_tensor=False, batch_size=64)
+        print("\n🧹 Sweeping up orphaned and ungrouped topics...")
+        ungrouped_res = await session.execute(select(Topic).where(Topic.match_status == 'unmatched'))
+        leftover_topics = ungrouped_res.scalars().all()
         
-        for t, v in zip(leftover_topics, vectors):
-            t.embedding = v.tolist() if isinstance(v, np.ndarray) else list(v)
-            t.match_status = "orphaned_or_ungrouped"
-            t.match_confidence = 0.0
+        if leftover_topics:
+            print(f"  Generating embeddings for {len(leftover_topics)} leftover topic(s)...")
+            texts = [f"{t.subject_code or 'Unknown'} unit {t.unit}: {t.topic}" for t in leftover_topics]
+            vectors = embedding_model.encode(texts, convert_to_tensor=False, batch_size=64)
             
-        await session.commit()
-        print("  ✅ Leftovers successfully processed.")
-    else:
-        print("  ✅ No leftovers found.")
+            for t, v in zip(leftover_topics, vectors):
+                t.embedding = v.tolist() if isinstance(v, np.ndarray) else list(v)
+                t.match_status = "orphaned_or_ungrouped"
+                t.match_confidence = 0.0
+                
+            await session.commit()
+            print("  ✅ Leftovers successfully processed.")
+        else:
+            print("  ✅ No leftovers found.")
 
-    print("\n✨ Done.")
-    print(f"   Gemini-confirmed: {stats['gemini_confirmed']} | Algorithmic fallback: {stats['auto_fallback']}")
-    print(f"   Total Gemini API calls: {stats['gemini_calls']} (~{stats['gemini_calls'] * 60 / max(GEMINI_RPM,1):.0f}s min. wall time at {GEMINI_RPM} RPM)")
+        print("\n✨ Done.")
+        print(f"   Gemini-confirmed: {stats['gemini_confirmed']} | Algorithmic fallback: {stats['auto_fallback']}")
+        print(f"   Total Gemini API calls: {stats['gemini_calls']} (~{stats['gemini_calls'] * 60 / max(GEMINI_RPM,1):.0f}s min. wall time at {GEMINI_RPM} RPM)")
 
 
 if __name__ == "__main__":

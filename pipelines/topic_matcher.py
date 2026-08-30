@@ -105,5 +105,3 @@ def match_topics(regulation_code, subject_code, questions: list[str]):
         matched_question['question'] = questions[i]
         matched_questions.append(matched_question)
     return matched_questions
-
-    
