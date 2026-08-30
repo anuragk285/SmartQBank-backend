@@ -295,6 +295,7 @@ async def get_ai_description(topic_id: int, db: AsyncSession = Depends(get_db)):
         await db.commit()
     except Exception as e:
         await db.rollback()
-        logger.error("DB Caching failed for topic_id=%s: %s", topic_id, str(e), exc_info=True)
+        logger.exception("DB Caching failed for topic_id=%s", topic_id)
+        raise HTTPException(status_code=500, detail=f"Cache write failed: {str(e)}")  # TEMP for debugging
 
     return ai_result
