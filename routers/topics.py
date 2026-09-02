@@ -121,7 +121,7 @@ def get_genai_client() -> genai.Client:
 async def generate_topic_description_async(subject_name: str, topic_name: str) -> TopicDescription:
     client = get_genai_client()
     response = await client.aio.models.generate_content(
-        model="gemini-3.5-flash",
+        model="gemini-3.5-flash-lite",
         contents=f"Subject: {subject_name}\nTopic: {topic_name}",
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
